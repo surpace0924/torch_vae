@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib import animation, rc
 
+import cv2
+
 
 class Encoder(nn.Module):
     def __init__(self, z_dim):
@@ -204,6 +206,16 @@ def main():
     print(ave_np.shape)   #(9600, 100, 2)
     print(log_var_np.shape)   #(9600, 100, 2)
     print(z_np.shape)   #(9600, 100, 2)
+
+    img = model.decoder(torch.zeros(1, 2).to(torch.float32).to(device))
+    img = img.to('cpu').detach().numpy().copy()
+    img = img.reshape((3, 64, 64))
+    img = img.transpose(1, 2, 0)
+    print(img.shape)
+
+
+    plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    plt.show()
 
     map_keyword = "tab10"
     cmap = plt.get_cmap(map_keyword)
