@@ -16,6 +16,22 @@ import matplotlib.animation as animation
 from matplotlib import animation, rc
 
 import cv2
+import math
+import random
+
+def torch_fix_seed(seed=1):
+    # Python random
+    random.seed(seed)
+    # Numpy
+    np.random.seed(seed)
+    # Pytorch
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms = True
+
+
+torch_fix_seed()
 
 
 class Encoder(nn.Module):
@@ -77,21 +93,54 @@ def criterion(predict, target, ave, log_dev):
 
 
 class JarTestDataset(Dataset):
-    def __init__(self,
-                 is_train=True,
-                 n_frames_input=10,
-                 n_frames_output=10, 
-                 valid_id=0):
+    def __init__(self, is_train=True, valid_id=0):
         super(JarTestDataset, self).__init__()
 
-        self.n_frames_input = n_frames_input
-        self.n_frames_output = n_frames_output
+        self.is_train = is_train
         self.mean = 0
         self.std = 1
 
         dataset_dir_path = os.path.join('..', 'vp_dataset', 'jar_tests')
         dataset_path = os.path.join(dataset_dir_path, 'dataset_mini.npy')
         self.dataset = np.load(dataset_path)
+
+        # 水質データの読み込み
+        dataset_dir_path = os.path.join('..', 'vp_dataset', 'jar_tests')
+        wq_data_path = os.path.join(dataset_dir_path, 'water_quality.csv')
+        df_water = pd.read_csv(wq_data_path)
+
+        # 水質データを最終濁度についてソートし，idのnumpy配列を得る
+        idx_array = df_water.sort_values('fin_turbidity')['id'].values
+
+        # idx配列をsplit_num行の2次元配列にする
+        # あまりの部分は -1 で埋める
+        split_num = 5
+        rows = split_num
+        cols = math.ceil(len(idx_array)/split_num)
+        total_elements = rows * cols
+        remainder_array = -1*np.ones(total_elements - len(idx_array))
+        idx_array = np.concatenate((idx_array, remainder_array)).astype(np.int32)
+        idx_mat = idx_array.reshape(cols, rows).T
+        
+        T_idx = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 24, 28, 32, 44, 51, 69, 89, 134, 239, 314, 599]
+        self.dataset = self.dataset[:, T_idx, ...]
+        print(self.dataset.shape)
+
+
+        # train test に分割
+        if is_train:
+            # 訓練データはidに対応する行以外を抜き出す
+            video_id_array = np.delete(idx_mat, valid_id, 0).flatten()
+        else:
+            # 検証データはid に対応する行を抜き出す
+            video_id_array = idx_mat[valid_id]
+            
+        # あまりの -1 は削除
+        video_id_array = video_id_array[video_id_array != -1]
+        self.dataset = self.dataset[video_id_array]
+        self.dataset = self.dataset.astype(np.float32)
+
+
         N, T, C, H, W = self.dataset.shape
         self.dataset = self.dataset.reshape((N*T, C, H, W))
         print(self.dataset.shape)
@@ -115,12 +164,8 @@ def main():
     # print(dataset.shape)
 
     BATCH_SIZE = 100
-    trainval_data = JarTestDataset()
-
-
-    train_size = int(len(trainval_data) * 0.8)
-    val_size = int(len(trainval_data) * 0.2)
-    train_data, val_data = torch.utils.data.random_split(trainval_data, [train_size, val_size])
+    train_data = JarTestDataset(is_train=True)
+    val_data = JarTestDataset(is_train=False)
 
     train_loader = DataLoader(dataset=train_data,
                             batch_size=BATCH_SIZE,
@@ -144,7 +189,7 @@ def main():
     # plt.imshow(image_numpy[0,0,:,:], cmap='gray')
 
     z_dim = 2
-    num_epochs = 2
+    num_epochs = 30
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     model = VAE(z_dim).to(device)
@@ -170,7 +215,7 @@ def main():
             
             if (i+1) % 50 == 0:
                 print(f'Epoch: {epoch+1}, loss: {loss: 0.4f}')
-                history["train_loss"].append(loss)
+            history["train_loss"].append(loss)
 
         model.eval()
         with torch.no_grad():
@@ -207,15 +252,32 @@ def main():
     print(log_var_np.shape)   #(9600, 100, 2)
     print(z_np.shape)   #(9600, 100, 2)
 
-    img = model.decoder(torch.zeros(1, 2).to(torch.float32).to(device))
-    img = img.to('cpu').detach().numpy().copy()
-    img = img.reshape((3, 64, 64))
-    img = img.transpose(1, 2, 0)
-    print(img.shape)
+    # model.encoder
+    # print()
 
+    fig = plt.figure()
+    num = 7
+    for n in range(num*num):
+        i = n // num
+        i = float(0.5 - (i / 0.8))
+        j = n % num
+        j = float(0.5 - (j / 0.8))
+        print(i, j)
 
-    plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        img = model.decoder(torch.Tensor([i, j]).to(torch.float32).to(device))
+        img = img.to('cpu').detach().numpy().copy()
+        img = img.reshape((3, 64, 64))
+        img = img.transpose(1, 2, 0)
+
+        fig.add_subplot(num, num, n+1)
+        plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     plt.show()
+
+
+    # for i in range(10):
+        
+    #     plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    #     plt.show()
 
     map_keyword = "tab10"
     cmap = plt.get_cmap(map_keyword)
